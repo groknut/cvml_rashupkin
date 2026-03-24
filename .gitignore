@@ -12,3 +12,10 @@ wheels/
 # Dirs
 
 knn_ocr/task/
+
+cyrrilic_mnist/cyrrilic/
+cyrrilic_mnist/__pycache__/
+cyrrilic_mnist/.ruff_cache
+cyrrilic_mnist/test/
+cyrrilic_mnist/train/
+cyrrilic_mnist/cyrillic.zip
