@@ -1,12 +1,14 @@
 
-from pathlib import Path
 import cv2
 import time
 from ultralytics import YOLO
 from ultralytics.utils.plotting import Annotator
 from playsound3 import playsound
 import numpy as np
+from pathlib import Path
 
+# вспомогательные функции
+# для вычисления локтевого угла (до 180 градусов)
 def get_angle(a, b, c):
     cb = np.atan2(c[1] - b[1], c[0] - b[0])
     ab = np.atan2(a[1] - b[1], a[0] - b[0])
@@ -14,7 +16,14 @@ def get_angle(a, b, c):
     angle = angle + 360 if angle < 0 else angle
     return 360 - angle if angle > 180 else angle
 
-def pushup(annotated, keypoints):
+# вычисление среднего угла сгибания рук
+def get_avg_angle(keypoints):
+    left_angle = get_angle(keypoints[0][5], keypoints[0][7], keypoints[0][9])
+    right_angle = get_angle(keypoints[0][6], keypoints[0][8], keypoints[0][10])
+    return (left_angle + right_angle) / 2
+
+# проверить, отжался ли человек (левый и правый локтевые углы >= 160, практически выпрямлены)
+def pushup(keypoints):
     nose_seen = keypoints[0][0] > 0 and keypoints[0][1] > 0
     eyes_seen = (
         keypoints[1][0] > 0
@@ -37,18 +46,44 @@ def pushup(annotated, keypoints):
 
     return left_angle >= 160 and right_angle >= 160
 
-model = YOLO("yolo26n-pose.pt")
-camera = cv2.VideoCapture(0)
-ps = None
+# с чем работаем
+model_path = Path(__file__).parent / "yolo26n-pose.pt"
+sound_file = Path(__file__).parent / "zvuk.mp3"
+model = YOLO(model_path)
+
+out_path = Path(__file__).parent / "out"
+out_path.mkdir(exist_ok=True)
+
 cnt = 0
 time_cnt = 0
 prev_push = False
+
+WAS_DOWN = False
+DOWN_ANGLE_THRESHOLD = 100
+
+camera = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+
+frame_width = int(camera.get(cv2.CAP_PROP_FRAME_WIDTH))
+frame_height = int(camera.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+fps = int(camera.get(cv2.CAP_PROP_FPS)) if camera.get(cv2.CAP_PROP_FPS) else 30
+
+fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+usb_output = out_path / 'usb_output.mp4'
+
+video = cv2.VideoWriter(
+    usb_output,
+    fourcc,
+    fps,
+    (frame_width, frame_height)
+)
 
 while camera.isOpened():
     ret, frame = camera.read()
     cv2.imshow("camera", frame)
 
     key = cv2.waitKey(10) & 0xFF
+
     if key == ord("q"):
         break
 
@@ -64,8 +99,10 @@ while camera.isOpened():
     keypoints = res.keypoints.xy.tolist()
     if not keypoints:
         time_cnt += 1
-        print(time_cnt)
-        if time_cnt >= 100: time_cnt = 0
+        if time_cnt >= 100:
+            time_cnt = 0
+            prev_push=False
+            cnt=0
     else:
         time_cnt = 0
 
@@ -78,7 +115,7 @@ while camera.isOpened():
 
     cv2.putText(annotated,
         f"cnt {cnt}",
-        (10, 20),
+        (20, 40),
         cv2.FONT_HERSHEY_SIMPLEX,
         1.5,
         (0, 255, 0),
@@ -86,12 +123,25 @@ while camera.isOpened():
     )
 
     if keypoints:
-        cur_push = pushup(annotated, keypoints[0])
-        if cur_push and not prev_push:
-            playsound("zvuk.mp3", block=False)
+        cur_push = pushup(keypoints[0])
+
+        if not cur_push:
+            if get_avg_angle(keypoints) < DOWN_ANGLE_THRESHOLD:
+                WAS_DOWN = True
+
+        if cur_push and WAS_DOWN and not prev_push:
+            playsound(sound_file, block=False)
             cnt += 1
-        prev_push = cur_push if cur_push is not None else False
+            WAS_DOWN = False
+        if cur_push is not None:
+            prev_push = cur_push
     else:
         prev_push = False
 
+    video.write(annotated)
+
     cv2.imshow("pose", annotated)
+
+camera.release()
+video.release()
+cv2.destroyAllWindows()
